@@ -11,27 +11,42 @@
 <body><main>
 <header><h1>⏱ Finger-Timer</h1><span class="badge">Stoppuhr mit Vorlauf</span></header>
 <section id="stage" class="stage" aria-live="off" role="button" tabindex="0" aria-label="Stoppuhr durch Antippen stoppen"><div class="eyebrow" id="status">Bereit</div><div class="time" id="time">00:00.00</div><div class="helper" id="hint">Countdown einstellen und Start drücken</div></section>
-<section class="controls"><div class="row"><div><div class="label">Vorlauf</div><div class="sub">0 bis 60 Sekunden</div></div><div class="stepper"><button id="minus" aria-label="Eine Sekunde weniger">−</button><input id="seconds" type="number" min="0" max="60" step="1" inputmode="numeric" aria-label="Vorlauf in Sekunden" value="5"><button id="plus" aria-label="Eine Sekunde mehr">+</button></div></div><div class="separator"></div><div class="row"><div><div class="label">Signaltöne</div><div class="sub">Countdown und Startsignal</div></div><button id="sound" class="toggle" aria-label="Signaltöne" aria-pressed="true"><span></span></button></div><div style="margin-top:12px;display:flex;align-items:center;gap:12px"><button id="testSound" class="secondary" style="flex:0;padding:10px 16px;font-size:14px" type="button">🔊 Testton</button><span id="soundInfo" style="font-size:12px;color:#9caac0" aria-live="polite">Ton testen</span></div></section>
+<section class="controls"><div class="row"><div><div class="label">Vorlauf</div><div class="sub">0 bis 60 Sekunden</div></div><div class="stepper"><button id="minus" aria-label="Eine Sekunde weniger">−</button><input id="seconds" type="number" min="0" max="60" step="1" inputmode="numeric" aria-label="Vorlauf in Sekunden" value="5"><button id="plus" aria-label="Eine Sekunde mehr">+</button></div></div><div class="separator"></div><div class="row"><div><div class="label">Signaltöne</div><div class="sub">Countdown und Startsignal</div></div><button id="sound" class="toggle" aria-label="Signaltöne" aria-pressed="true"><span></span></button></div><div style="margin-top:12px;display:flex;align-items:center;gap:12px"><button id="testSound" class="secondary" style="flex:0;padding:10px 16px;font-size:14px" type="button">🔊 Testton</button><span id="soundInfo" style="font-size:12px;color:#9caac0" aria-live="polite">Ton testen (v3)</span></div></section>
 <div class="buttons"><button class="primary" id="start">Starten</button><button class="secondary" id="reset">Zurücksetzen</button></div>
 <div class="history" id="history">Noch keine Zeit gestoppt</div><footer>Während des Trainings geöffnet lassen. Tippe auf die große Anzeige, um zu stoppen.</footer>
 </main><script>(()=>{'use strict';
 const $=id=>document.getElementById(id),stage=$('stage'),status=$('status'),display=$('time'),hint=$('hint'),seconds=$('seconds'),sound=$('sound'),start=$('start'),reset=$('reset'),history=$('history'),soundInfo=$('soundInfo');
-let mode='idle',raf=0,begin=0,countEnd=0,lastTick=null,audio=null,wake=null,elapsed=0,signalNodes=[];
+let mode='idle',raf=0,begin=0,countEnd=0,lastTick=null,wake=null,elapsed=0;
 const saved=k=>{try{return localStorage.getItem(k)}catch{return null}},save=(k,v)=>{try{localStorage.setItem(k,v)}catch{}};
 seconds.value=saved('delay')??'5';sound.setAttribute('aria-pressed',saved('sound')!=='false'?'true':'false');
 const clamp=n=>Math.max(0,Math.min(60,Number.isFinite(n)?Math.round(n):5));
 const fmt=ms=>{let cs=Math.floor(Math.max(0,ms)/10),ss=Math.floor(cs/100),mm=Math.floor(ss/60);return String(mm).padStart(2,'0')+':'+String(ss%60).padStart(2,'0')+'.'+String(cs%100).padStart(2,'0')};
 const changeDelay=n=>{seconds.value=clamp(n);save('delay',seconds.value)};
 $('minus').onclick=()=>changeDelay(Number(seconds.value)-1);$('plus').onclick=()=>changeDelay(Number(seconds.value)+1);seconds.onchange=()=>changeDelay(Number(seconds.value));
-function stopSignals(){signalNodes.forEach(n=>{try{n.stop()}catch{}});signalNodes=[]}
-function unlockAudio(){try{audio=audio||new(window.AudioContext||window.webkitAudioContext)();if(audio.state!=='running')audio.resume().catch(()=>{});return audio}catch(e){soundInfo.textContent='Audio nicht verfügbar';return null}}
-// All sounds are scheduled synchronously from a direct user tap, which avoids
-// iOS Safari suspending sounds initiated later from requestAnimationFrame.
-function toneAt(ctx,at,freq,len,volume=.38){const osc=ctx.createOscillator(),gain=ctx.createGain();osc.type='sine';osc.frequency.setValueAtTime(freq,at);gain.gain.setValueAtTime(.0001,at);gain.gain.exponentialRampToValueAtTime(volume,at+.012);gain.gain.setValueAtTime(volume,at+Math.max(.018,len-.035));gain.gain.exponentialRampToValueAtTime(.0001,at+len);osc.connect(gain);gain.connect(ctx.destination);osc.onended=()=>{try{osc.disconnect();gain.disconnect()}catch{}};osc.start(at);osc.stop(at+len+.015);signalNodes.push(osc)}
-function testTone(){stopSignals();const ctx=unlockAudio();if(!ctx)return;soundInfo.textContent='Testton abgespielt';const t=ctx.currentTime+.045;toneAt(ctx,t,780,.16);toneAt(ctx,t+.22,1050,.22)}
+// WAV audio on iOS: direct HTMLMediaElement play() from the tap and detailed error reporting.
+const testAudio=new Audio('./start.wav');testAudio.preload='auto';
+const tickAudio=new Audio('./beep.wav');tickAudio.preload='auto';
+const startAudio=new Audio('./start.wav');startAudio.preload='auto';
+let timers=[];
+function stopSignals(){for(const id of timers)clearTimeout(id);timers=[];for(const el of [tickAudio,startAudio]){el.pause();el.currentTime=0}}
+async function testTone(){
+ soundInfo.textContent='Ton wird geprüft …';
+ try{
+  testAudio.pause();testAudio.currentTime=0;testAudio.muted=false;testAudio.volume=1;
+  await testAudio.play();
+  soundInfo.textContent='Audio gestartet ✓ (v3)';
+ }catch(e){soundInfo.textContent='Audio-Fehler: '+(e.name||String(e))}
+}
 $('testSound').onclick=testTone;
 sound.onclick=()=>{let on=sound.getAttribute('aria-pressed')!=='true';sound.setAttribute('aria-pressed',String(on));save('sound',String(on));soundInfo.textContent=on?'Ton eingeschaltet':'Ton ausgeschaltet';if(on)testTone();else stopSignals()};
-function scheduleCountdown(n){stopSignals();if(sound.getAttribute('aria-pressed')!=='true')return;const ctx=unlockAudio();if(!ctx)return;const t=ctx.currentTime+.04;for(let i=0;i<n;i++)toneAt(ctx,t+i,640,.105);toneAt(ctx,t+n,1150,.34)}
+function playCue(el){try{el.pause();el.currentTime=0;el.volume=1;let result=el.play();if(result)result.catch(e=>{soundInfo.textContent='Countdown-Audio: '+e.name})}catch(e){soundInfo.textContent='Tonfehler: '+e.name}}
+function scheduleCountdown(n){
+ stopSignals();if(sound.getAttribute('aria-pressed')!=='true')return;
+ // The first short sound is triggered in the original button tap. Other cues are reused media elements.
+ if(n>0)playCue(tickAudio);else playCue(startAudio);
+ for(let i=1;i<n;i++)timers.push(setTimeout(()=>playCue(tickAudio),i*1000));
+ if(n>0)timers.push(setTimeout(()=>playCue(startAudio),n*1000));
+}
 async function requestWake(){try{if('wakeLock' in navigator)wake=await navigator.wakeLock.request('screen')}catch{}}
 function releaseWake(){if(wake){wake.release().catch(()=>{});wake=null}}
 function updateState(next,label,description){mode=next;stage.className='stage '+(next==='idle'?'':next);status.textContent=label;hint.textContent=description;start.textContent=next==='running'?'Stoppen':next==='countdown'?'Abbrechen':next==='stopped'?'Erneut starten':'Starten';seconds.disabled=next==='countdown'||next==='running';$('minus').disabled=seconds.disabled;$('plus').disabled=seconds.disabled}
